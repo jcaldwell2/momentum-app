@@ -6,6 +6,7 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { MainTabParamList, RootStackParamList } from '../../types';
 import { HomeScreen } from '../../screens/HomeScreen';
+import { CalendarScreen } from '../../screens/CalendarScreen';
 import { StatsScreen } from '../../screens/StatsScreen';
 import { SettingsScreen } from '../../screens/SettingsScreen';
 import { TaskCreationModal } from '../../screens/TaskCreationModal';
@@ -23,6 +24,8 @@ function MainTabs() {
           let iconName: keyof typeof Ionicons.glyphMap;
 
           if (route.name === 'Home') {
+            iconName = focused ? 'today' : 'today-outline';
+          } else if (route.name === 'Calendar') {
             iconName = focused ? 'calendar' : 'calendar-outline';
           } else if (route.name === 'Stats') {
             iconName = focused ? 'stats-chart' : 'stats-chart-outline';
@@ -59,22 +62,29 @@ function MainTabs() {
         },
       })}
     >
-      <Tab.Screen 
-        name="Home" 
+      <Tab.Screen
+        name="Home"
         component={HomeScreen}
         options={{
           title: 'Today',
         }}
       />
-      <Tab.Screen 
-        name="Stats" 
+      <Tab.Screen
+        name="Calendar"
+        component={CalendarScreen}
+        options={{
+          title: 'Calendar',
+        }}
+      />
+      <Tab.Screen
+        name="Stats"
         component={StatsScreen}
         options={{
           title: 'Progress',
         }}
       />
-      <Tab.Screen 
-        name="Settings" 
+      <Tab.Screen
+        name="Settings"
         component={SettingsScreen}
         options={{
           title: 'Settings',

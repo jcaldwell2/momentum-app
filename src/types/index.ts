@@ -84,11 +84,53 @@ export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 
 export type TaskStatus = 'pending' | 'in-progress' | 'completed' | 'cancelled';
 
+export enum RecurrenceFrequency {
+  DAILY = 'daily',
+  WEEKLY = 'weekly',
+  MONTHLY = 'monthly'
+}
+
+export interface WeeklyRecurrenceOptions {
+  daysOfWeek: number[]; // 0-6, Sunday = 0
+}
+
 export interface RecurrencePattern {
-  type: 'daily' | 'weekly' | 'monthly';
+  type: RecurrenceFrequency;
   interval: number; // every N days/weeks/months
-  daysOfWeek?: number[]; // 0-6, Sunday = 0
+  weeklyOptions?: WeeklyRecurrenceOptions;
   endDate?: string;
+  endAfterOccurrences?: number;
+}
+
+export interface RecurringTaskTemplate {
+  id: string;
+  title: string;
+  description?: string;
+  category: TaskCategory;
+  priority: TaskPriority;
+  scheduledTime?: string; // HH:MM format
+  duration?: number; // minutes
+  xpReward: number;
+  recurrencePattern: RecurrencePattern;
+  createdAt: string;
+  updatedAt: string;
+  isActive: boolean;
+  lastGeneratedDate?: string; // Last date instances were generated up to
+}
+
+export interface RecurringTaskInstance extends Task {
+  templateId: string;
+  instanceDate: string; // YYYY-MM-DD - the specific date this instance is for
+  isModified: boolean; // true if this instance was edited individually
+}
+
+export interface RecurrenceException {
+  id: string;
+  templateId: string;
+  date: string; // YYYY-MM-DD
+  type: 'skip' | 'modify';
+  modifiedTask?: Partial<Task>;
+  createdAt: string;
 }
 
 export interface CalendarDay {
@@ -125,6 +167,178 @@ export type RootStackParamList = {
 
 export type MainTabParamList = {
   Home: undefined;
+  Calendar: undefined;
   Stats: undefined;
   Settings: undefined;
 };
+
+// Calendar types
+export type CalendarViewType = 'month' | 'week' | 'day';
+
+export interface CalendarCellData {
+  date: string; // YYYY-MM-DD
+  isCurrentMonth: boolean;
+  isToday: boolean;
+  isSelected: boolean;
+  tasks: Task[];
+  taskCount: number;
+  completedTaskCount: number;
+  hasHighPriorityTasks: boolean;
+  hasOverdueTasks: boolean;
+  workloadLevel: 'light' | 'moderate' | 'heavy';
+}
+
+export interface CalendarNavigationProps {
+  currentDate: Date;
+  viewType: CalendarViewType;
+  onDateChange: (date: Date) => void;
+  onViewTypeChange: (viewType: CalendarViewType) => void;
+}
+
+export interface CalendarGridData {
+  weeks: CalendarCellData[][];
+  monthName: string;
+  year: number;
+}
+
+// App Messages System
+export interface AppMessage {
+  id: string;
+  type: 'welcome' | 'feature' | 'update' | 'tip' | 'announcement';
+  title: string;
+  content: string;
+  priority: 'low' | 'medium' | 'high';
+  targetingRules: MessageTargetingRules;
+  createdAt: string;
+  expiresAt?: string;
+  isDismissible: boolean;
+  actionButton?: {
+    text: string;
+    action: 'navigate' | 'external' | 'dismiss';
+    target?: string;
+  };
+}
+
+export interface MessageTargetingRules {
+  userLevel?: {
+    min?: number;
+    max?: number;
+  };
+  dateRange?: {
+    start: string;
+    end: string;
+  };
+  showOnce?: boolean;
+  showAfterDays?: number;
+}
+
+export interface MessageDisplaySettings {
+  showWelcomeMessages: boolean;
+  showFeatureAnnouncements: boolean;
+  showTips: boolean;
+  maxMessagesPerScreen: number;
+  autoHideAfterSeconds?: number;
+}
+
+export interface DismissedMessage {
+  messageId: string;
+  dismissedAt: string;
+  userId: string;
+}
+
+// Planning System Types
+export interface TaskTemplate {
+  id: string;
+  name: string;
+  title: string;
+  description?: string;
+  category: TaskCategory;
+  priority: TaskPriority;
+  scheduledTime?: string; // HH:MM format
+  duration?: number; // minutes
+  xpReward: number;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  isActive: boolean;
+  usageCount: number;
+}
+
+export enum PlanningPeriod {
+  WEEK = 'week',
+  MONTH = 'month',
+  QUARTER = 'quarter'
+}
+
+export interface WorkloadAnalysis {
+  period: PlanningPeriod;
+  startDate: string;
+  endDate: string;
+  totalTasks: number;
+  totalMinutes: number;
+  averageTasksPerDay: number;
+  averageMinutesPerDay: number;
+  peakDays: {
+    date: string;
+    taskCount: number;
+    totalMinutes: number;
+  }[];
+  lightDays: {
+    date: string;
+    taskCount: number;
+    totalMinutes: number;
+  }[];
+  categoryDistribution: {
+    category: TaskCategory;
+    taskCount: number;
+    totalMinutes: number;
+    percentage: number;
+  }[];
+  workloadLevel: 'light' | 'moderate' | 'heavy' | 'overloaded';
+  recommendations: string[];
+}
+
+export interface BulkTaskCreation {
+  templateId?: string;
+  tasks: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>[];
+  dateRange: {
+    startDate: string;
+    endDate: string;
+  };
+  distribution: 'daily' | 'weekly' | 'custom';
+  skipWeekends?: boolean;
+  skipHolidays?: boolean;
+}
+
+export interface PlanningPreview {
+  dateRange: {
+    startDate: string;
+    endDate: string;
+  };
+  plannedTasks: Task[];
+  workloadAnalysis: WorkloadAnalysis;
+  conflicts: {
+    date: string;
+    reason: string;
+    severity: 'low' | 'medium' | 'high';
+  }[];
+  suggestions: {
+    type: 'reschedule' | 'reduce' | 'distribute';
+    message: string;
+    affectedDates: string[];
+  }[];
+}
+
+export interface SmartSchedulingSuggestion {
+  suggestedDate: string;
+  suggestedTime?: string;
+  confidence: number; // 0-1
+  reason: string;
+  workloadImpact: 'minimal' | 'moderate' | 'significant';
+  alternatives: {
+    date: string;
+    time?: string;
+    confidence: number;
+    reason: string;
+  }[];
+}

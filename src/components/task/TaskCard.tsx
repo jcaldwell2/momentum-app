@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { Task, TaskPriority, TaskCategory } from '../../types';
 import { Card } from '../ui/Card';
 import { Badge } from '../ui/Badge';
+import { RecurringTaskBadge } from './RecurringTaskBadge';
 
 interface TaskCardProps {
   task: Task;
@@ -93,15 +94,23 @@ export function TaskCard({ task, onPress, onComplete, onEdit }: TaskCardProps) {
             </Badge>
             
             <View style={styles.categoryBadge}>
-              <Ionicons 
-                name={getCategoryIcon(task.category) as any} 
-                size={12} 
-                color="#6b7280" 
+              <Ionicons
+                name={getCategoryIcon(task.category) as any}
+                size={12}
+                color="#6b7280"
               />
               <Text style={styles.categoryText}>
                 {task.category.charAt(0).toUpperCase() + task.category.slice(1)}
               </Text>
             </View>
+
+            {/* Show recurring badge for recurring tasks */}
+            {task.isRecurring && task.recurrencePattern && (
+              <RecurringTaskBadge
+                pattern={task.recurrencePattern}
+                size="small"
+              />
+            )}
           </View>
 
           <View style={styles.timeInfo}>

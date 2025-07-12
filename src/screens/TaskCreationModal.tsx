@@ -16,7 +16,18 @@ import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
-import { Task, TaskCategory, TaskPriority } from '../types';
+import {
+  RecurrenceSelector,
+  WeeklyDaySelector,
+  RecurrencePreview
+} from '../components/task';
+import {
+  Task,
+  TaskCategory,
+  TaskPriority,
+  RecurrencePattern,
+  RecurrenceFrequency
+} from '../types';
 
 interface TaskCreationModalProps {
   navigation: any;
@@ -48,6 +59,9 @@ export function TaskCreationModal({ navigation, route }: TaskCreationModalProps)
   const [duration, setDuration] = useState(editTask?.duration?.toString() || '30');
   const [xpReward, setXpReward] = useState(editTask?.xpReward?.toString() || '10');
   const [isRecurring, setIsRecurring] = useState(editTask?.isRecurring || false);
+  const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern | null>(
+    editTask?.recurrencePattern || null
+  );
 
   // UI state
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -123,7 +137,8 @@ export function TaskCreationModal({ navigation, route }: TaskCreationModalProps)
         scheduledDate: scheduledDate.toISOString().split('T')[0],
         scheduledTime: scheduledTime.toTimeString().slice(0, 5),
         duration: duration ? Number(duration) : undefined,
-        isRecurring,
+        isRecurring: !!recurrencePattern,
+        recurrencePattern: recurrencePattern || undefined,
         xpReward: Number(xpReward),
       };
 
@@ -177,7 +192,11 @@ export function TaskCreationModal({ navigation, route }: TaskCreationModalProps)
   };
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={true}
+    >
       <Card style={styles.formCard}>
         {/* Basic Info */}
         <View style={styles.section}>
@@ -331,18 +350,51 @@ export function TaskCreationModal({ navigation, route }: TaskCreationModalProps)
             />
           </View>
 
-          <TouchableOpacity
-            style={styles.recurringToggle}
-            onPress={() => setIsRecurring(!isRecurring)}
-          >
-            <View style={styles.recurringInfo}>
-              <Ionicons name="repeat" size={20} color="#667eea" />
-              <Text style={styles.recurringText}>Recurring Task</Text>
-            </View>
-            <View style={[styles.toggle, isRecurring && styles.toggleActive]}>
-              <View style={[styles.toggleThumb, isRecurring && styles.toggleThumbActive]} />
-            </View>
-          </TouchableOpacity>
+          {/* Recurrence Pattern Selector */}
+          <RecurrenceSelector
+            pattern={recurrencePattern}
+            onPatternChange={(pattern) => {
+              setRecurrencePattern(pattern);
+              setIsRecurring(!!pattern);
+            }}
+            showQuickSetup={true}
+            onQuickTemplateSelect={(template) => {
+              // Auto-fill form with template defaults
+              setTitle(template.defaultTitle);
+              setCategory(template.defaultCategory);
+              setPriority(template.defaultPriority);
+              setDuration(template.defaultDuration.toString());
+              setXpReward(template.xpReward.toString());
+              if (template.defaultTime) {
+                const [hours, minutes] = template.defaultTime.split(':');
+                const timeDate = new Date();
+                timeDate.setHours(parseInt(hours), parseInt(minutes));
+                setScheduledTime(timeDate);
+              }
+            }}
+          />
+
+          {/* Weekly Day Selector - only show for weekly recurrence */}
+          {recurrencePattern?.type === RecurrenceFrequency.WEEKLY && (
+            <WeeklyDaySelector
+              weeklyOptions={recurrencePattern.weeklyOptions || { daysOfWeek: [1] }}
+              onOptionsChange={(options) => {
+                setRecurrencePattern({
+                  ...recurrencePattern,
+                  weeklyOptions: options
+                });
+              }}
+            />
+          )}
+
+          {/* Recurrence Preview */}
+          {recurrencePattern && (
+            <RecurrencePreview
+              pattern={recurrencePattern}
+              startDate={scheduledDate}
+              previewCount={5}
+            />
+          )}
         </View>
       </Card>
 
@@ -369,6 +421,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f9fafb',
+  },
+  scrollContent: {
+    paddingBottom: 100,
   },
   headerButton: {
     paddingHorizontal: 16,

@@ -1,5 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Task, User, XPEntry, Streak, SyncQueueItem, TaskCategory, TaskPriority, TaskStatus } from '../types';
+import {
+  Task,
+  User,
+  XPEntry,
+  Streak,
+  SyncQueueItem,
+  TaskCategory,
+  TaskPriority,
+  TaskStatus,
+  RecurringTaskTemplate,
+  RecurringTaskInstance,
+  RecurrenceException
+} from '../types';
+import { recurringTaskService } from './recurring';
 
 class DatabaseService {
   private initialized = false;
@@ -73,6 +86,9 @@ class DatabaseService {
 
       // Initialize empty arrays for other data
       await AsyncStorage.setItem('xpEntries', JSON.stringify([]));
+      await AsyncStorage.setItem('recurringTemplates', JSON.stringify([]));
+      await AsyncStorage.setItem('recurringInstances', JSON.stringify([]));
+      await AsyncStorage.setItem('recurrenceExceptions', JSON.stringify([]));
       console.log('✅ Initial data seeded successfully');
     } else {
       console.log('✅ Using existing user data');
@@ -158,6 +174,12 @@ class DatabaseService {
   async createTask(task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>): Promise<Task> {
     if (!this.initialized) throw new Error('Database not initialized');
 
+    // If it's a recurring task, create a template and generate instances
+    if (task.isRecurring && task.recurrencePattern) {
+      return await this.createRecurringTask(task);
+    }
+
+    // Create regular one-time task
     const id = `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const now = new Date().toISOString();
 
@@ -173,6 +195,52 @@ class DatabaseService {
     await AsyncStorage.setItem('tasks', JSON.stringify(updatedTasks));
 
     return newTask;
+  }
+
+  // Create recurring task template and generate initial instances
+  private async createRecurringTask(task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>): Promise<Task> {
+    if (!task.recurrencePattern) {
+      throw new Error('Recurrence pattern is required for recurring tasks');
+    }
+
+    // Create the recurring task template
+    const template = recurringTaskService.createTemplate(
+      task.title,
+      task.description,
+      task.category,
+      task.priority,
+      task.scheduledTime,
+      task.duration,
+      task.xpReward,
+      task.recurrencePattern
+    );
+
+    // Save the template
+    await this.saveRecurringTemplate(template);
+
+    // Generate instances for the next 30 days
+    const startDate = new Date(task.scheduledDate);
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 30);
+
+    const instances = recurringTaskService.generateInstances(
+      template,
+      startDate,
+      endDate
+    );
+
+    // Save the instances as regular tasks
+    const existingTasks = await this.getTasks();
+    const updatedTasks = [...existingTasks, ...instances];
+    await AsyncStorage.setItem('tasks', JSON.stringify(updatedTasks));
+
+    // Return the first instance as the "created" task
+    return instances[0] || {
+      ...task,
+      id: `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
   }
 
   async getTasks(date?: string): Promise<Task[]> {
@@ -378,6 +446,150 @@ class DatabaseService {
     return xpEntries
       .sort((a, b) => new Date(b.earnedAt).getTime() - new Date(a.earnedAt).getTime())
       .slice(0, limit);
+  }
+
+  // Recurring Task Template operations
+  async saveRecurringTemplate(template: RecurringTaskTemplate): Promise<void> {
+    if (!this.initialized) throw new Error('Database not initialized');
+
+    const templatesData = await AsyncStorage.getItem('recurringTemplates');
+    const templates: RecurringTaskTemplate[] = templatesData ? JSON.parse(templatesData) : [];
+    
+    const existingIndex = templates.findIndex(t => t.id === template.id);
+    if (existingIndex >= 0) {
+      templates[existingIndex] = template;
+    } else {
+      templates.push(template);
+    }
+
+    await AsyncStorage.setItem('recurringTemplates', JSON.stringify(templates));
+  }
+
+  async getRecurringTemplates(): Promise<RecurringTaskTemplate[]> {
+    if (!this.initialized) throw new Error('Database not initialized');
+
+    const templatesData = await AsyncStorage.getItem('recurringTemplates');
+    return templatesData ? JSON.parse(templatesData) : [];
+  }
+
+  async updateRecurringTemplate(id: string, updates: Partial<RecurringTaskTemplate>): Promise<void> {
+    if (!this.initialized) throw new Error('Database not initialized');
+
+    const templates = await this.getRecurringTemplates();
+    const templateIndex = templates.findIndex(t => t.id === id);
+    
+    if (templateIndex === -1) {
+      throw new Error('Recurring template not found');
+    }
+
+    templates[templateIndex] = {
+      ...templates[templateIndex],
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
+
+    await AsyncStorage.setItem('recurringTemplates', JSON.stringify(templates));
+  }
+
+  async deleteRecurringTemplate(id: string): Promise<void> {
+    if (!this.initialized) throw new Error('Database not initialized');
+
+    const templates = await this.getRecurringTemplates();
+    const filteredTemplates = templates.filter(t => t.id !== id);
+    await AsyncStorage.setItem('recurringTemplates', JSON.stringify(filteredTemplates));
+
+    // Also remove all instances of this template
+    const tasks = await this.getTasks();
+    const filteredTasks = tasks.filter(task => {
+      const instance = task as RecurringTaskInstance;
+      return !instance.templateId || instance.templateId !== id;
+    });
+    await AsyncStorage.setItem('tasks', JSON.stringify(filteredTasks));
+  }
+
+  // Generate recurring instances for upcoming dates
+  async generateRecurringInstances(daysAhead: number = 30): Promise<void> {
+    if (!this.initialized) throw new Error('Database not initialized');
+
+    const templates = await this.getRecurringTemplates();
+    const activeTemplates = templates.filter(t => t.isActive);
+    
+    if (activeTemplates.length === 0) return;
+
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + daysAhead);
+
+    const exceptions = await this.getRecurrenceExceptions();
+    const existingTasks = await this.getTasks();
+    const newInstances: RecurringTaskInstance[] = [];
+
+    for (const template of activeTemplates) {
+      const templateExceptions = exceptions.filter(ex => ex.templateId === template.id);
+      const instances = recurringTaskService.generateInstances(
+        template,
+        startDate,
+        endDate,
+        templateExceptions
+      );
+
+      // Filter out instances that already exist
+      const newTemplateInstances = instances.filter(instance => {
+        return !existingTasks.some(task => {
+          const existingInstance = task as RecurringTaskInstance;
+          return existingInstance.templateId === template.id &&
+                 existingInstance.instanceDate === instance.instanceDate;
+        });
+      });
+
+      newInstances.push(...newTemplateInstances);
+    }
+
+    if (newInstances.length > 0) {
+      const updatedTasks = [...existingTasks, ...newInstances];
+      await AsyncStorage.setItem('tasks', JSON.stringify(updatedTasks));
+    }
+  }
+
+  // Recurrence Exception operations
+  async getRecurrenceExceptions(): Promise<RecurrenceException[]> {
+    if (!this.initialized) throw new Error('Database not initialized');
+
+    const exceptionsData = await AsyncStorage.getItem('recurrenceExceptions');
+    return exceptionsData ? JSON.parse(exceptionsData) : [];
+  }
+
+  async saveRecurrenceException(exception: RecurrenceException): Promise<void> {
+    if (!this.initialized) throw new Error('Database not initialized');
+
+    const exceptions = await this.getRecurrenceExceptions();
+    exceptions.push(exception);
+    await AsyncStorage.setItem('recurrenceExceptions', JSON.stringify(exceptions));
+  }
+
+  // Cleanup old recurring instances
+  async cleanupOldRecurringInstances(daysToKeep: number = 30): Promise<void> {
+    if (!this.initialized) throw new Error('Database not initialized');
+
+    const tasks = await this.getTasks();
+    const recurringInstances = tasks.filter(task => {
+      const instance = task as RecurringTaskInstance;
+      return instance.templateId !== undefined;
+    }) as RecurringTaskInstance[];
+
+    const cleanedInstances = recurringTaskService.cleanupOldInstances(
+      recurringInstances,
+      daysToKeep
+    );
+
+    // Get non-recurring tasks
+    const nonRecurringTasks = tasks.filter(task => {
+      const instance = task as RecurringTaskInstance;
+      return instance.templateId === undefined;
+    });
+
+    const updatedTasks = [...nonRecurringTasks, ...cleanedInstances];
+    await AsyncStorage.setItem('tasks', JSON.stringify(updatedTasks));
   }
 }
 

@@ -15,12 +15,22 @@ import { TaskCard } from '../components/task/TaskCard';
 import { Card } from '../components/ui/Card';
 import { Progress } from '../components/ui/Progress';
 import { Button } from '../components/ui/Button';
+import { MessageList } from '../components/messages';
 import { Task } from '../types';
 
-export function HomeScreen({ navigation }: any) {
-  const { state, loadTasks, completeTask } = useApp();
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+export function HomeScreen({ navigation, route }: any) {
+  const { state, loadTasks, completeTask, dismissMessage, loadMessages } = useApp();
+  const [selectedDate, setSelectedDate] = useState(
+    route?.params?.selectedDate || new Date().toISOString().split('T')[0]
+  );
   const [refreshing, setRefreshing] = useState(false);
+
+  // Update selectedDate when route params change (from calendar navigation)
+  useEffect(() => {
+    if (route?.params?.selectedDate) {
+      setSelectedDate(route.params.selectedDate);
+    }
+  }, [route?.params?.selectedDate]);
 
   // Load tasks when screen focuses
   useFocusEffect(
@@ -31,7 +41,10 @@ export function HomeScreen({ navigation }: any) {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadTasks(selectedDate);
+    await Promise.all([
+      loadTasks(selectedDate),
+      loadMessages(),
+    ]);
     setRefreshing(false);
   };
 
@@ -53,6 +66,27 @@ export function HomeScreen({ navigation }: any) {
 
   const handleCreateTask = () => {
     navigation.navigate('TaskCreation');
+  };
+
+  const handleMessageDismiss = async (messageId: string) => {
+    try {
+      await dismissMessage(messageId);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to dismiss message');
+    }
+  };
+
+  const handleMessageNavigate = (target: string) => {
+    // Handle navigation based on target
+    if (target === 'TaskCreation') {
+      navigation.navigate('TaskCreation');
+    } else if (target.startsWith('http')) {
+      // External links are handled by the MessageCard component
+      return;
+    } else {
+      // Handle other internal navigation
+      navigation.navigate(target);
+    }
   };
 
   const todayTasks = state.tasks.filter(task => task.scheduledDate === selectedDate);
@@ -113,6 +147,18 @@ export function HomeScreen({ navigation }: any) {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
+        {/* App Messages */}
+        {state.messages.length > 0 && (
+          <MessageList
+            messages={state.messages}
+            onDismiss={handleMessageDismiss}
+            onNavigate={handleMessageNavigate}
+            style={styles.messagesSection}
+            maxVisible={state.messageSettings.maxMessagesPerScreen}
+            useBannerForHigh={true}
+          />
+        )}
+
         {/* Date Navigation */}
         <Card style={styles.dateCard}>
           <View style={styles.dateHeader}>
@@ -274,6 +320,9 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
+  },
+  messagesSection: {
+    marginTop: 8,
   },
   dateCard: {
     margin: 16,

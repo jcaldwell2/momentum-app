@@ -1,12 +1,28 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
-import { Task, User, Streak, XPEntry, StatsData } from '../types';
+import {
+  Task,
+  User,
+  Streak,
+  XPEntry,
+  StatsData,
+  AppMessage,
+  MessageDisplaySettings,
+  RecurringTaskTemplate
+} from '../types';
 import { databaseService } from '../services/database';
+import { messagesService } from '../services/messages';
+import { planningService } from '../services/planning';
 
 interface AppState {
   user: User | null;
   tasks: Task[];
   streaks: Streak[];
   xpEntries: XPEntry[];
+  messages: AppMessage[];
+  messageSettings: MessageDisplaySettings;
+  recurringTemplates: RecurringTaskTemplate[];
+  currentCalendarDate: Date;
+  calendarViewType: 'month' | 'week' | 'day';
   isLoading: boolean;
   error: string | null;
 }
@@ -21,13 +37,33 @@ type AppAction =
   | { type: 'DELETE_TASK'; payload: string }
   | { type: 'SET_STREAKS'; payload: Streak[] }
   | { type: 'SET_XP_ENTRIES'; payload: XPEntry[] }
-  | { type: 'COMPLETE_TASK'; payload: string };
+  | { type: 'COMPLETE_TASK'; payload: string }
+  | { type: 'SET_MESSAGES'; payload: AppMessage[] }
+  | { type: 'DISMISS_MESSAGE'; payload: string }
+  | { type: 'SET_MESSAGE_SETTINGS'; payload: MessageDisplaySettings }
+  | { type: 'SET_RECURRING_TEMPLATES'; payload: RecurringTaskTemplate[] }
+  | { type: 'ADD_RECURRING_TEMPLATE'; payload: RecurringTaskTemplate }
+  | { type: 'UPDATE_RECURRING_TEMPLATE'; payload: { id: string; updates: Partial<RecurringTaskTemplate> } }
+  | { type: 'DELETE_RECURRING_TEMPLATE'; payload: string }
+  | { type: 'SET_CALENDAR_DATE'; payload: Date }
+  | { type: 'SET_CALENDAR_VIEW_TYPE'; payload: 'month' | 'week' | 'day' };
 
 const initialState: AppState = {
   user: null,
   tasks: [],
   streaks: [],
   xpEntries: [],
+  messages: [],
+  messageSettings: {
+    showWelcomeMessages: true,
+    showFeatureAnnouncements: true,
+    showTips: true,
+    maxMessagesPerScreen: 3,
+    autoHideAfterSeconds: 10,
+  },
+  recurringTemplates: [],
+  currentCalendarDate: new Date(),
+  calendarViewType: 'month',
   isLoading: true,
   error: null,
 };
@@ -81,6 +117,46 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_XP_ENTRIES':
       return { ...state, xpEntries: action.payload };
     
+    case 'SET_MESSAGES':
+      return { ...state, messages: action.payload };
+    
+    case 'DISMISS_MESSAGE':
+      return {
+        ...state,
+        messages: state.messages.filter(message => message.id !== action.payload),
+      };
+    
+    case 'SET_MESSAGE_SETTINGS':
+      return { ...state, messageSettings: action.payload };
+    
+    case 'SET_CALENDAR_DATE':
+      return { ...state, currentCalendarDate: action.payload };
+    
+    case 'SET_RECURRING_TEMPLATES':
+      return { ...state, recurringTemplates: action.payload };
+    
+    case 'ADD_RECURRING_TEMPLATE':
+      return { ...state, recurringTemplates: [...state.recurringTemplates, action.payload] };
+    
+    case 'UPDATE_RECURRING_TEMPLATE':
+      return {
+        ...state,
+        recurringTemplates: state.recurringTemplates.map(template =>
+          template.id === action.payload.id
+            ? { ...template, ...action.payload.updates }
+            : template
+        ),
+      };
+    
+    case 'DELETE_RECURRING_TEMPLATE':
+      return {
+        ...state,
+        recurringTemplates: state.recurringTemplates.filter(template => template.id !== action.payload),
+      };
+    
+    case 'SET_CALENDAR_VIEW_TYPE':
+      return { ...state, calendarViewType: action.payload };
+    
     default:
       return state;
   }
@@ -100,6 +176,19 @@ interface AppContextType {
   loadStreaks: () => Promise<void>;
   loadXPEntries: () => Promise<void>;
   getStatsData: () => StatsData;
+  // Message actions
+  loadMessages: () => Promise<void>;
+  dismissMessage: (messageId: string) => Promise<void>;
+  updateMessageSettings: (settings: Partial<MessageDisplaySettings>) => Promise<void>;
+  // Recurring template actions
+  loadRecurringTemplates: () => Promise<void>;
+  updateRecurringTemplate: (id: string, updates: Partial<RecurringTaskTemplate>) => Promise<void>;
+  deleteRecurringTemplate: (id: string) => Promise<void>;
+  generateRecurringInstances: () => Promise<void>;
+  // Calendar actions
+  setCalendarDate: (date: Date) => void;
+  setCalendarViewType: (viewType: 'month' | 'week' | 'day') => void;
+  getTasksForDateRange: (startDate: Date, endDate: Date) => Task[];
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -121,14 +210,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await databaseService.initialize();
       console.log('✅ Database service initialized');
       
+      console.log('📨 Initializing messages service...');
+      await messagesService.initialize();
+      console.log('✅ Messages service initialized');
+      
+      console.log('📋 Initializing planning service...');
+      await planningService.initialize();
+      console.log('✅ Planning service initialized');
+      
       // Load initial data
       console.log('📊 Loading initial data...');
+      
+      // Load user first, then other data that depends on user
+      await loadUser();
+      
+      // Load the rest in parallel (except messages which needs user data)
+      console.log('📊 Loading tasks, streaks, XP entries, and recurring templates...');
       await Promise.all([
-        loadUser(),
         loadTasks(),
         loadStreaks(),
         loadXPEntries(),
+        loadRecurringTemplates(),
       ]);
+
+      // Generate recurring instances in the background
+      console.log('🔄 Generating recurring task instances...');
+      await generateRecurringInstances();
+      
+      // Load messages after user is definitely available
+      console.log('📨 Loading messages after user data is available...');
+      await loadMessages();
       console.log('✅ Initial data loaded');
       
       dispatch({ type: 'SET_LOADING', payload: false });
@@ -224,6 +335,52 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const loadMessages = async () => {
+    console.log('📨 loadMessages function called');
+    try {
+      // Get user directly from database service to ensure we have the latest user data
+      const user = await databaseService.getUser();
+      console.log('📨 Loading messages for user:', user?.id, 'level:', user?.level);
+      const messages = await messagesService.getMessagesForUser(user);
+      console.log('📨 Loaded messages:', messages.length);
+      dispatch({ type: 'SET_MESSAGES', payload: messages });
+      
+      // Load message settings
+      const settings = messagesService.getSettings();
+      console.log('📨 Loaded settings:', settings);
+      dispatch({ type: 'SET_MESSAGE_SETTINGS', payload: settings });
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to load messages' });
+    }
+  };
+
+  const dismissMessage = async (messageId: string) => {
+    try {
+      if (state.user) {
+        await messagesService.dismissMessage(messageId, state.user.id);
+        dispatch({ type: 'DISMISS_MESSAGE', payload: messageId });
+      }
+    } catch (error) {
+      console.error('Failed to dismiss message:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to dismiss message' });
+    }
+  };
+
+  const updateMessageSettings = async (newSettings: Partial<MessageDisplaySettings>) => {
+    try {
+      await messagesService.updateSettings(newSettings);
+      const updatedSettings = messagesService.getSettings();
+      dispatch({ type: 'SET_MESSAGE_SETTINGS', payload: updatedSettings });
+      
+      // Reload messages with new settings
+      await loadMessages();
+    } catch (error) {
+      console.error('Failed to update message settings:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to update message settings' });
+    }
+  };
+
   const getStatsData = (): StatsData => {
     const completedTasks = state.tasks.filter(task => task.status === 'completed');
     const totalXP = state.user?.totalXP || 0;
@@ -269,6 +426,67 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   };
 
+  const setCalendarDate = (date: Date) => {
+    dispatch({ type: 'SET_CALENDAR_DATE', payload: date });
+  };
+
+  const setCalendarViewType = (viewType: 'month' | 'week' | 'day') => {
+    dispatch({ type: 'SET_CALENDAR_VIEW_TYPE', payload: viewType });
+  };
+
+  const getTasksForDateRange = (startDate: Date, endDate: Date): Task[] => {
+    const startString = startDate.toISOString().split('T')[0];
+    const endString = endDate.toISOString().split('T')[0];
+    
+    return state.tasks.filter(task => {
+      return task.scheduledDate >= startString && task.scheduledDate <= endString;
+    });
+  };
+
+  // Recurring template functions
+  const loadRecurringTemplates = async () => {
+    try {
+      const templates = await databaseService.getRecurringTemplates();
+      dispatch({ type: 'SET_RECURRING_TEMPLATES', payload: templates });
+    } catch (error) {
+      console.error('Failed to load recurring templates:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to load recurring templates' });
+    }
+  };
+
+  const updateRecurringTemplate = async (id: string, updates: Partial<RecurringTaskTemplate>) => {
+    try {
+      await databaseService.updateRecurringTemplate(id, updates);
+      dispatch({ type: 'UPDATE_RECURRING_TEMPLATE', payload: { id, updates } });
+    } catch (error) {
+      console.error('Failed to update recurring template:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to update recurring template' });
+    }
+  };
+
+  const deleteRecurringTemplate = async (id: string) => {
+    try {
+      await databaseService.deleteRecurringTemplate(id);
+      dispatch({ type: 'DELETE_RECURRING_TEMPLATE', payload: id });
+      // Reload tasks to remove instances
+      await loadTasks();
+    } catch (error) {
+      console.error('Failed to delete recurring template:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to delete recurring template' });
+    }
+  };
+
+  const generateRecurringInstances = async () => {
+    try {
+      await databaseService.generateRecurringInstances();
+      // Reload tasks to show new instances
+      await loadTasks();
+    } catch (error) {
+      console.error('Failed to generate recurring instances:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to generate recurring instances' });
+    }
+  };
+
   const contextValue: AppContextType = {
     state,
     loadTasks,
@@ -280,6 +498,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadStreaks,
     loadXPEntries,
     getStatsData,
+    loadMessages,
+    dismissMessage,
+    updateMessageSettings,
+    loadRecurringTemplates,
+    updateRecurringTemplate,
+    deleteRecurringTemplate,
+    generateRecurringInstances,
+    setCalendarDate,
+    setCalendarViewType,
+    getTasksForDateRange,
   };
 
   return (
